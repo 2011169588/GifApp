@@ -50,6 +50,16 @@ cd GifApp
 App 启动时从远程 Gist 拉取公告，无需发版即可推送更新信息。  
 公告内容维护在 [GitHub Gist](https://gist.github.com/2011169588/9e80ff69c80c3e1aa407563468ae14b5)。
 
+## 开源许可
+
+| 库 | 许可 |
+|----|------|
+| [FFmpegKit](https://github.com/arthenica/ffmpeg-kit) (v6.0 full) | GPLv3 |
+| Jetpack Compose / Material3 / AndroidX | Apache 2.0 |
+
+FFmpegKit 是 GPLv3 许可的完整 FFmpeg 发行版，包含 GPL 协议的编解码器。  
+如果您对 GPL 合规有特定需求，可替换为 `ffmpeg-kit-min-gpl` 或 `ffmpeg-kit-min` 变体。
+
 ## License
 
 MIT
