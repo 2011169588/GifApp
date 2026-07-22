@@ -111,6 +111,7 @@ class ExportService : Service() {
                 val cfg = GifConfig(
                     outputWidth = obj.getInt("outputWidth"), outputHeight = obj.getInt("outputHeight"),
                     frameDelayMs = obj.optInt("frameDelayMs", 100),
+                    maxFrameRate = obj.optInt("maxFrameRate", 15),
                     maxVideoFrames = obj.optInt("maxVideoFrames", 20),
                     loopForever = obj.optBoolean("loopForever", true),
                     colorCount = obj.optInt("colorCount", 256),
@@ -303,7 +304,12 @@ class ExportService : Service() {
         val segH = computeSegHeight(targetH, params.segmentCount, params.gapRatio)
         val gapH = (targetH * params.gapRatio).toInt()
         val batchSize = params.config.parallelCount.coerceIn(1, params.segmentCount)
-        val gifFps = params.config.maxFrameRate.coerceIn(1, 30)
+        // 多图模式用 frameDelayMs(ms)，GIF/视频模式用 maxFrameRate(fps)
+        val gifFps = if (params.gifSourcePath != null) {
+            params.config.maxFrameRate.coerceIn(1, 30)
+        } else {
+            (1000f / params.config.frameDelayMs).coerceIn(1f, 30f).toInt()
+        }
 
         for (batchStart in 0 until params.segmentCount step batchSize) {
             if (cancelled.get()) break
@@ -343,12 +349,11 @@ class ExportService : Service() {
                 prevCrop?.recycle()
                 if (frameSeq == 0) continue
 
-                val label = "s$localIdx"
                 inputArgs.add("-framerate $gifFps -i \"${segDir.absolutePath}/f_%03d.png\"")
-                filterParts.add("[${label}]scale=${params.config.outputWidth}:${params.config.outputHeight}:flags=lanczos[${label}o]")
+                filterParts.add("[${localIdx}:v]scale=${params.config.outputWidth}:${params.config.outputHeight}:flags=lanczos[s${localIdx}o]")
                 val outFile = File(outputDir, "segment_${segIdx + 1}.gif")
                 outputFiles.add(outFile)
-                mapArgs.add("-map \"[${label}o]\" -loop ${if (params.config.loopForever) 0 else 1} $opt\"${outFile.absolutePath}\"")
+                mapArgs.add("-map \"[s${localIdx}o]\" -loop ${if (params.config.loopForever) 0 else 1} $opt\"${outFile.absolutePath}\"")
             }
 
             if (outputFiles.isEmpty()) break

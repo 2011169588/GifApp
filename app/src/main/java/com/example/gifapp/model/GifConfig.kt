@@ -3,7 +3,7 @@ package com.example.gifapp.model
 data class GifConfig(
     val outputWidth: Int = 480,
     val outputHeight: Int = 800,
-    val frameDelayMs: Int = 100,
+    val frameDelayMs: Int = 1000,
     val maxFrameRate: Int = 15,
     val maxVideoFrames: Int = 20,
     val loopForever: Boolean = true,

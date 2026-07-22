@@ -182,8 +182,13 @@ private fun TaskCard(
             Spacer(Modifier.height(8.dp))
 
             // Config info
+            val frameInfo = if (task.sourceType == com.example.gifapp.model.ExportTask.SourceType.VIDEO || task.gifSourcePath != null) {
+                "${task.config.maxFrameRate}fps"
+            } else {
+                "${task.config.frameDelayMs}ms/帧"
+            }
             Text(
-                "${task.segmentCount}段 · ${task.config.outputWidth}×${task.config.outputHeight} · ${task.config.frameDelayMs}ms/帧",
+                "${task.segmentCount}段 · ${task.config.outputWidth}×${task.config.outputHeight} · $frameInfo",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )

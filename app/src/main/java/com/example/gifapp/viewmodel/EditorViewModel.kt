@@ -158,7 +158,7 @@ class EditorViewModel : ViewModel() {
         gifConfig = GifConfig(
             outputWidth = prefs.getInt("outputWidth", 480),
             outputHeight = prefs.getInt("outputHeight", 800),
-            frameDelayMs = prefs.getInt("frameDelayMs", 100),
+            frameDelayMs = prefs.getInt("frameDelayMs", 1000),
             maxFrameRate = prefs.getInt("maxFrameRate", 15),
             maxVideoFrames = prefs.getInt("maxVideoFrames", 20),
             loopForever = prefs.getBoolean("loopForever", true),
@@ -240,7 +240,7 @@ class EditorViewModel : ViewModel() {
                     put("status", t.status.name); put("progress", t.progress); put("total", t.total)
                     put("errorMessage", t.errorMessage ?: "")
                     put("outputWidth", t.config.outputWidth); put("outputHeight", t.config.outputHeight)
-                    put("frameDelayMs", t.config.frameDelayMs); put("maxVideoFrames", t.config.maxVideoFrames)
+                    put("frameDelayMs", t.config.frameDelayMs); put("maxFrameRate", t.config.maxFrameRate); put("maxVideoFrames", t.config.maxVideoFrames)
                     put("loopForever", t.config.loopForever); put("colorCount", t.config.colorCount); put("useBayerDither", t.config.useBayerDither); put("losslessOptimize", t.config.losslessOptimize)
                     put("paletteStatsFull", t.config.paletteStatsFull); put("transparencyOptimize", t.config.transparencyOptimize); put("frameDedup", t.config.frameDedup)
                     put("sourceWidth", t.sourceWidth); put("sourceHeight", t.sourceHeight)
@@ -302,7 +302,7 @@ class EditorViewModel : ViewModel() {
                     status = actualStatus, progress = obj.getInt("progress"), total = obj.getInt("total"),
                     results = results, errorMessage = errMsg,
                     config = GifConfig(outputWidth = obj.getInt("outputWidth"), outputHeight = obj.getInt("outputHeight"),
-                        frameDelayMs = obj.getInt("frameDelayMs"), maxVideoFrames = obj.getInt("maxVideoFrames"),
+                        frameDelayMs = obj.getInt("frameDelayMs"), maxFrameRate = obj.getInt("maxFrameRate"), maxVideoFrames = obj.getInt("maxVideoFrames"),
                         loopForever = obj.getBoolean("loopForever"), colorCount = obj.optInt("colorCount", 256),
                         useBayerDither = obj.optBoolean("useBayerDither", false), losslessOptimize = obj.optBoolean("losslessOptimize", false),
                         paletteStatsFull = obj.optBoolean("paletteStatsFull", false),
