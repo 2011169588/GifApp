@@ -353,7 +353,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     // 支持公告内容中的超链接
-                    val annotated = remember(a.message) { buildLinkText(a.message) }
+                    val annotated = remember(a.message) { renderMarkdown(a.message) }
                     ClickableText(text = annotated, style = MaterialTheme.typography.bodyMedium.copy(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)),
                         onClick = { offset ->
@@ -416,7 +416,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     Text("更新内容：", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                    val releaseNotes = remember(info.releaseNotes) { buildLinkText(info.releaseNotes) }
+                    val releaseNotes = remember(info.releaseNotes) { renderMarkdown(info.releaseNotes) }
                     ClickableText(text = releaseNotes, style = MaterialTheme.typography.bodySmall.copy(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)),
                         onClick = { offset ->
@@ -463,25 +463,82 @@ fun EditorScreen(viewModel: EditorViewModel) {
     }
 }
 
-/** 检测文本中的 URL 并构建为可点击的 AnnotatedString */
-private fun buildLinkText(text: String): androidx.compose.ui.text.AnnotatedString {
+/** 将 Markdown 子集（标题/加粗/列表/链接）渲染为 AnnotatedString */
+private fun renderMarkdown(text: String): androidx.compose.ui.text.AnnotatedString {
     val urlPattern = java.util.regex.Pattern.compile("https?://[\\w./?=&%-]+")
-    val matcher = urlPattern.matcher(text)
+    val boldPattern = java.util.regex.Pattern.compile("\\*\\*(.+?)\\*\\*")
+    val headingPattern = java.util.regex.Pattern.compile("^###?\\s+(.*)$", java.util.regex.Pattern.MULTILINE)
+    val linkColor = androidx.compose.ui.graphics.Color(0xFF4F46E5)
     val builder = androidx.compose.ui.text.AnnotatedString.Builder()
-    var lastEnd = 0
-    while (matcher.find()) {
-        if (matcher.start() > lastEnd) {
-            builder.append(text.substring(lastEnd, matcher.start()))
+
+    // 按行处理
+    for (line in text.lines()) {
+        val trimmed = line.trimStart()
+        val isList = trimmed.startsWith("- ") || trimmed.startsWith("* ")
+        val isHeading = trimmed.startsWith("###") || trimmed.startsWith("##")
+
+        if (builder.length > 0) builder.append("\n")
+
+        if (isList) {
+            builder.append("  • ")
+            appendStyledText(builder, trimmed.removePrefix("- ").removePrefix("* "), boldPattern, urlPattern, linkColor)
+        } else if (isHeading) {
+            val headingText = trimmed.replace(Regex("^#+\\s*"), "")
+            val start = builder.length
+            appendStyledText(builder, headingText, boldPattern, urlPattern, linkColor)
+            builder.addStyle(SpanStyle(fontWeight = FontWeight.Bold), start, builder.length)
+        } else {
+            appendStyledText(builder, trimmed, boldPattern, urlPattern, linkColor)
         }
-        val url = matcher.group()
-        val start = builder.length
-        builder.append(url)
-        builder.addStringAnnotation("url", url, start, builder.length)
-        builder.addStyle(SpanStyle(color = androidx.compose.ui.graphics.Color(0xFF4F46E5), textDecoration = TextDecoration.Underline), start, builder.length)
-        lastEnd = matcher.end()
     }
-    if (lastEnd < text.length) builder.append(text.substring(lastEnd))
     return builder.toAnnotatedString()
+}
+
+/** 处理一行中的加粗和 URL 标记 */
+private fun appendStyledText(
+    builder: androidx.compose.ui.text.AnnotatedString.Builder,
+    text: String,
+    boldPattern: java.util.regex.Pattern,
+    urlPattern: java.util.regex.Pattern,
+    linkColor: androidx.compose.ui.graphics.Color
+) {
+    // 先分段处理加粗
+    val segments = mutableListOf<Pair<String, Boolean>>() // text, isBold
+    val boldMatcher = boldPattern.matcher(text)
+    var lastEnd = 0
+    while (boldMatcher.find()) {
+        if (boldMatcher.start() > lastEnd) segments.add(text.substring(lastEnd, boldMatcher.start()) to false)
+        segments.add(boldMatcher.group(1) to true)
+        lastEnd = boldMatcher.end()
+    }
+    if (lastEnd < text.length) segments.add(text.substring(lastEnd) to false)
+
+    for ((segText, isBold) in segments) {
+        // 再处理 URL
+        val urlMatcher = urlPattern.matcher(segText)
+        var segLast = 0
+        while (urlMatcher.find()) {
+            if (urlMatcher.start() > segLast) {
+                val plain = segText.substring(segLast, urlMatcher.start())
+                val ps = builder.length
+                builder.append(plain)
+                if (isBold) builder.addStyle(SpanStyle(fontWeight = FontWeight.Bold), ps, builder.length)
+            }
+            val url = urlMatcher.group()
+            val us = builder.length
+            builder.append(url)
+            builder.addStringAnnotation("url", url, us, builder.length)
+            builder.addStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline), us, builder.length)
+            if (isBold) builder.addStyle(SpanStyle(fontWeight = FontWeight.Bold), us, builder.length)
+            segLast = urlMatcher.end()
+        }
+        if (segLast < segText.length) {
+            val remaining = segText.substring(segLast)
+            val rs = builder.length
+            builder.append(remaining)
+            if (isBold) builder.addStyle(SpanStyle(fontWeight = FontWeight.Bold), rs, builder.length)
+        }
+    }
 }
 
 /** GitHub Octocat 图标 */
