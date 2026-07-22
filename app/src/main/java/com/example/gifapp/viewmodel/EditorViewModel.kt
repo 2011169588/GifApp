@@ -15,7 +15,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arthenica.ffmpegkit.FFmpegKit
-import com.example.gifapp.gif.FFmpegGifGenerator
 import com.example.gifapp.model.ExportTask
 import com.example.gifapp.model.GifConfig
 import com.example.gifapp.model.GifResult
@@ -26,12 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.graphics.Canvas
-import android.graphics.Movie
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.ByteArrayInputStream
 
 class EditorViewModel : ViewModel() {
 
@@ -82,6 +77,13 @@ class EditorViewModel : ViewModel() {
     var previewBitmap by mutableStateOf<Bitmap?>(null)
         private set
 
+    // ---- Import Error ----
+    var showImportError by mutableStateOf(false)
+        private set
+    var importErrorMessage by mutableStateOf("")
+
+    fun dismissImportError() { showImportError = false; importErrorMessage = "" }
+
     // ---- Crash Detection ----
     var safeParallelCount by mutableIntStateOf(6)
         private set
@@ -93,6 +95,10 @@ class EditorViewModel : ViewModel() {
         private set
 
     private var cachedVideoFrames: List<Bitmap> = emptyList()
+
+    // ---- GIF 源（导入时只存文件不拆帧，导出时再拆） ----
+    var gifSourcePath by mutableStateOf<String?>(null)
+        private set
 
     // ---- Homepage ----
     var homepageDescription by mutableStateOf("")
@@ -239,6 +245,7 @@ class EditorViewModel : ViewModel() {
                     put("paletteStatsFull", t.config.paletteStatsFull); put("transparencyOptimize", t.config.transparencyOptimize); put("frameDedup", t.config.frameDedup)
                     put("sourceWidth", t.sourceWidth); put("sourceHeight", t.sourceHeight)
                     t.videoUri?.let { put("videoUri", it) }
+                    t.gifSourcePath?.let { put("gifSourcePath", it) }
                     if (t.imageUris.isNotEmpty()) {
                         val ia = org.json.JSONArray(); t.imageUris.forEach { ia.put(it) }; put("imageUris", ia)
                     }
@@ -300,7 +307,8 @@ class EditorViewModel : ViewModel() {
                         useBayerDither = obj.optBoolean("useBayerDither", false), losslessOptimize = obj.optBoolean("losslessOptimize", false),
                         paletteStatsFull = obj.optBoolean("paletteStatsFull", false),
                         transparencyOptimize = obj.optBoolean("transparencyOptimize", false),
-                        frameDedup = obj.optBoolean("frameDedup", false))))
+                        frameDedup = obj.optBoolean("frameDedup", false)),
+                    gifSourcePath = obj.optString("gifSourcePath", null)?.takeIf { it.isNotEmpty() }))
             }
             tasks = restored
         } catch (_: Exception) {}
@@ -346,13 +354,14 @@ class EditorViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 mediaSource = null; generatedGifs = emptyList()
-                previewBitmap = null; imageUris = uris
+                previewBitmap = null
                 if (uris.isNotEmpty()) {
-                    // 确保 URI 权限持久化（防止长时间选择后权限过期）
-                    tryTakePersistablePermission(context, uris)
-                    val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, uris[0]) }
+                    // 复制到缓存（避免 URI 权限过期问题）
+                    val cachedUris = withContext(Dispatchers.IO) { copyUrisToCache(context, uris, "images") }
+                    imageUris = cachedUris
+                    val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, cachedUris[0]) }
                     if (bm != null) { previewBitmap = bm
-                        mediaSource = MediaSource.Image(bm, uris[0].toString())
+                        mediaSource = MediaSource.Image(bm, cachedUris[0].toString())
                         currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
                 }
             } catch (e: Exception) {
@@ -363,61 +372,51 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    /** 导入 GIF 动图，提取每帧作为素材 */
+    /** 导入 GIF 动图（只存源文件+首帧预览，导出时再拆帧） */
     fun importGif(context: Context, uri: Uri) {
         if (isImporting) return
         isImporting = true
         viewModelScope.launch {
             mediaSource = null; generatedGifs = emptyList(); previewBitmap = null; imageUris = emptyList()
             try {
-                val frameFiles = withContext(Dispatchers.IO) {
-                    val cacheDir = File(context.cacheDir, "gif_frames").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
-                    val inputStream = context.contentResolver.openInputStream(uri) ?: throw Exception("无法读取 GIF")
-                    val frames = decodeGifFrames(inputStream)
-                    frames.mapIndexed { i, bm ->
-                        val file = File(cacheDir, "frame_${"%03d".format(i)}.png")
-                        FileOutputStream(file).use { bm.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                        Uri.fromFile(file)
-                    }.also { inputStream.close() }
+                val gifFilePath = withContext(Dispatchers.IO) {
+                    val cacheDir = File(context.cacheDir, "gif_source").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+                    // 保存原始 GIF
+                    val gifFile = File(cacheDir, "input.gif")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        gifFile.outputStream().use { input.copyTo(it) }
+                    } ?: throw Exception("无法读取 GIF")
+                    // 校验 GIF 魔数
+                    val magic = gifFile.inputStream().use { it.readBytes().take(6).toByteArray() }
+                    val magicStr = magic.toString(Charsets.US_ASCII)
+                    if (magicStr != "GIF87a" && magicStr != "GIF89a") {
+                        gifFile.delete(); throw Exception("请选择正确的文件")
+                    }
+                    gifFile.absolutePath
                 }
-                if (frameFiles.isEmpty()) throw Exception("未提取到帧")
-                imageUris = frameFiles
-                val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, frameFiles[0]) }
-                if (bm != null) { previewBitmap = bm
-                    mediaSource = MediaSource.Image(bm, frameFiles[0].toString())
-                    currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
+                gifSourcePath = gifFilePath
+                // 取第一帧做预览
+                val frameDir = File(context.cacheDir, "gif_preview").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+                val previewCmd = "-y -i \"$gifFilePath\" -vsync 0 -vframes 1 \"${frameDir.absolutePath}/preview.png\""
+                val session = try { com.arthenica.ffmpegkit.FFmpegKit.execute(previewCmd) }
+                    catch (_: Throwable) { null }
+                if (session != null && com.arthenica.ffmpegkit.ReturnCode.isSuccess(session.returnCode)) {
+                    val previewFile = File(frameDir, "preview.png")
+                    if (previewFile.exists()) {
+                        val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, Uri.fromFile(previewFile)) }
+                        if (bm != null) { previewBitmap = bm
+                            mediaSource = MediaSource.Image(bm, previewFile.absolutePath)
+                            currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
+                    }
+                }
             } catch (e: Exception) {
-                // fallback: 当作静态图加载
-                val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, uri) }
-                if (bm != null) { previewBitmap = bm; imageUris = listOf(uri)
-                    mediaSource = MediaSource.Image(bm, uri.toString())
-                    currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
+                if (e.message == "请选择正确的文件") {
+                    importErrorMessage = "请选择正确的文件"; showImportError = true
+                }
+                e.printStackTrace()
             } finally {
                 isImporting = false
             }
-        }
-    }
-
-    /** 提取 GIF 所有帧为 Bitmap 列表 */
-    private fun decodeGifFrames(inputStream: InputStream): List<Bitmap> {
-        val bytes = inputStream.readBytes()
-        val movie = Movie.decodeStream(ByteArrayInputStream(bytes))
-        if (movie == null) return emptyList()
-        val w = movie.width().coerceAtLeast(1); val h = movie.height().coerceAtLeast(1)
-        val duration = movie.duration()
-        if (duration <= 0) {
-            val bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            Canvas(bm).apply { movie.draw(this, 0f, 0f) }
-            return listOf(bm)
-        }
-        // 按时间步长提取帧，确保覆盖整个动画
-        val step = (duration / maxOf(duration / 100, 2)).coerceIn(30, 500)
-        val frameTimes = (0 until duration step step).toList().ifEmpty { listOf(0) }
-        return frameTimes.map { t ->
-            movie.setTime(t)
-            val bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            Canvas(bm).apply { movie.draw(this, 0f, 0f) }
-            bm
         }
     }
     fun appendImages(context: Context, uris: List<Uri>) {
@@ -425,8 +424,8 @@ class EditorViewModel : ViewModel() {
         isImporting = true
         viewModelScope.launch {
             try {
-                tryTakePersistablePermission(context, uris)
-                val merged = (imageUris + uris).distinct()
+                val cachedNew = withContext(Dispatchers.IO) { copyUrisToCache(context, uris, "images") }
+                val merged = (imageUris + cachedNew).distinct()
                 imageUris = merged
                 if (previewBitmap == null && merged.isNotEmpty()) {
                     val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, merged[0]) }
@@ -442,14 +441,22 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    /** 尝试持久化 URI 读取权限（防止文件选择器待太久后权限过期） */
-    private fun tryTakePersistablePermission(context: Context, uris: List<Uri>) {
-        try {
-            for (uri in uris) {
-                context.contentResolver.takePersistableUriPermission(uri,
-                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    /** 将 URI 内容复制到缓存目录，返回本地 cached Uri（不依赖临时权限） */
+    private fun copyUrisToCache(context: Context, uris: List<Uri>, subDir: String): List<Uri> {
+        val dir = File(context.cacheDir, subDir).apply { mkdirs() }
+        // 清理旧缓存
+        dir.listFiles()?.forEach { it.delete() }
+        return uris.mapIndexed { i, uri ->
+            val file = File(dir, "img_${"%03d".format(i)}.png")
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    file.outputStream().use { input.copyTo(it) }
+                }
+                Uri.fromFile(file)
+            } catch (_: Exception) {
+                Uri.EMPTY
             }
-        } catch (_: Exception) { /* 非持久化 URI 会抛异常，忽略 */ }
+        }.filter { it != Uri.EMPTY }
     }
 
     fun switchImage(context: Context, index: Int) {
@@ -505,14 +512,16 @@ class EditorViewModel : ViewModel() {
         // 构建任务（含 Service 需要的导出参数）
         val srcW = previewBitmap?.width ?: 0
         val srcH = previewBitmap?.height ?: 0
+        val isGif = gifSourcePath != null
         val task = ExportTask(
-            sourceLabel = when { imageUris.size > 1 -> "${imageUris.size}张图片"; mediaSource is MediaSource.Video -> "视频"; else -> "图片" },
+            sourceLabel = when { isGif -> "GIF"; imageUris.size > 1 -> "${imageUris.size}张图片"; mediaSource is MediaSource.Video -> "视频"; else -> "图片" },
             sourceType = when (mediaSource) { is MediaSource.Video -> ExportTask.SourceType.VIDEO; else -> ExportTask.SourceType.IMAGES },
             segmentCount = segmentCount, gapRatio = gapRatio, config = gifConfig,
             status = TaskStatus.QUEUED, total = segmentCount,
             sourceWidth = srcW, sourceHeight = srcH,
             videoUri = (mediaSource as? MediaSource.Video)?.uri,
-            imageUris = imageUris.map { it.toString() }
+            imageUris = if (isGif) emptyList() else imageUris.map { it.toString() },
+            gifSourcePath = gifSourcePath
         )
         tasks = listOf(task) + tasks
         showTaskPanel = true
@@ -586,7 +595,7 @@ class EditorViewModel : ViewModel() {
 
     fun clearAll() {
         mediaSource = null; imageUris = emptyList(); currentImageIndex = 0
-        previewBitmap = null
+        previewBitmap = null; gifSourcePath = null; showImportError = false; importErrorMessage = ""
         cachedVideoFrames.forEach { it.recycle() }; cachedVideoFrames = emptyList()
         generatedGifs = emptyList(); lastSavedDirName = null; resetTransform()
     }

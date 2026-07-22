@@ -29,7 +29,8 @@ data class ExportTask(
     val sourceWidth: Int = 0,
     val sourceHeight: Int = 0,
     val videoUri: String? = null,
-    val imageUris: List<String> = emptyList()
+    val imageUris: List<String> = emptyList(),
+    val gifSourcePath: String? = null
 ) {
     enum class SourceType { IMAGES, VIDEO }
 

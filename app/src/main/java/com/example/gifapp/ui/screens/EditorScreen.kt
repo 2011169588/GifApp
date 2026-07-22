@@ -58,7 +58,6 @@ fun EditorScreen(viewModel: EditorViewModel) {
     val showTaskPanel = viewModel.showTaskPanel
 
     var showClearConfirm by remember { mutableStateOf(false) }
-    var showImportMenu by remember { mutableStateOf(false) }
     var showExportSettings by remember { mutableStateOf(false) }
     var announcements by remember { mutableStateOf(emptyList<com.example.gifapp.model.Announcement>()) }
     var currentAnnouncementIndex by remember { mutableIntStateOf(0) }
@@ -81,10 +80,10 @@ fun EditorScreen(viewModel: EditorViewModel) {
         }
     }
 
-    val multiImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+    val multiImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) viewModel.importMultipleImages(context, uris)
     }
-    val appendImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+    val appendImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) viewModel.appendImages(context, uris)
     }
     val gifPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -252,41 +251,44 @@ fun EditorScreen(viewModel: EditorViewModel) {
                         onGapRatioChange = { viewModel.updateGapRatio(it) },
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
 
-                    // Export button
-                    Button(onClick = { showExportSettings = true },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 20.dp).height(52.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                        Icon(Icons.Outlined.FileDownload, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("导出设置 · $segmentCount 段", fontWeight = FontWeight.SemiBold)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                // FAB (仅图片/动图模式显示)
-                if (mediaSource !is com.example.gifapp.model.MediaSource.Video) {
-                    Column(modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AnimatedVisibility(visible = showImportMenu,
-                            enter = fadeIn() + slideInVertically { it / 2 },
-                            exit = fadeOut() + slideOutVertically { it / 2 }) {
-                            SmallFloatingActionButton(onClick = { showImportMenu = false; appendImagePicker.launch(arrayOf("image/*")) },
-                                containerColor = if (importing) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.secondaryContainer) {
-                                Icon(Icons.Default.NoteAdd, "追加图片")
+                    // Export button row（加号融入导出按钮）
+                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 20.dp).height(52.dp)) {
+                        // 统一背景（可点击区域）
+                        Surface(shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.fillMaxSize().clickable { showExportSettings = true }) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Outlined.FileDownload, null, modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onPrimary)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("导出设置 · $segmentCount 段", fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onPrimary)
+                                }
                             }
                         }
-                        FloatingActionButton(onClick = { showImportMenu = !showImportMenu },
-                            containerColor = if (importing) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary) {
-                            Icon(if (showImportMenu) Icons.Default.Close else Icons.Default.Add, "导入")
+                        // 加号按钮（覆盖在右侧，带阴影区分）
+                        if (mediaSource !is com.example.gifapp.model.MediaSource.Video && viewModel.gifSourcePath == null) {
+                            Surface(modifier = Modifier.align(Alignment.CenterEnd).size(52.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                shadowElevation = 4.dp) {
+                                IconButton(onClick = { appendImagePicker.launch("image/*") },
+                                    modifier = Modifier.fillMaxSize()) {
+                                    Icon(Icons.Default.Add, "追加图片",
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(28.dp))
+                                }
+                            }
                         }
                     }
+                    Spacer(Modifier.height(8.dp))
                 }
 
             } else {
                 // Empty state with polished design
                 EmptyImportState(
-                    onPickMultiple = { multiImagePicker.launch(arrayOf("image/*")) },
+                    onPickMultiple = { multiImagePicker.launch("image/*") },
                     onPickGif = { gifPicker.launch("image/gif") },
                     onPickVideo = { videoPicker.launch("video/*") },
                     homepageDescription = viewModel.homepageDescription,
@@ -301,7 +303,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
     if (showExportSettings) {
         ExportSettingsDialog(config = gifConfig, sourceWidth = sourceBitmap?.width ?: 0,
             sourceHeight = sourceBitmap?.height ?: 0, segmentCount = segmentCount, gapRatio = gapRatio,
-            isVideo = viewModel.isVideoMode,
+            isVideo = viewModel.isVideoMode || viewModel.gifSourcePath != null,
             onConfigChange = { viewModel.updateGifConfig(it) },
             onConfirm = { showExportSettings = false; ensureNotificationPermission { viewModel.startExport(context) } },
             onDismiss = { showExportSettings = false })
@@ -370,6 +372,18 @@ fun EditorScreen(viewModel: EditorViewModel) {
                 }
             },
             confirmButton = { TextButton(onClick = { dismissAnnouncement() }) { Text(if (currentAnnouncementIndex == announcements.lastIndex) "知道了" else "下一条 →") } }
+        )
+    }
+
+    // GIF 导入错误提示
+    if (viewModel.showImportError) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissImportError() },
+            shape = RoundedCornerShape(16.dp),
+            icon = { Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("导入失败", fontWeight = FontWeight.Bold) },
+            text = { Text(viewModel.importErrorMessage) },
+            confirmButton = { TextButton(onClick = { viewModel.dismissImportError() }) { Text("知道了") } }
         )
     }
 
@@ -596,3 +610,10 @@ private fun ImportCard(icon: androidx.compose.ui.graphics.vector.ImageVector,
         }
     }
 }
+
+
+
+
+
+
+

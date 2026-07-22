@@ -96,7 +96,8 @@ class ExportService : Service() {
         val taskId: String, val sourceType: ExportTask.SourceType,
         val videoUri: String?, val imageUris: List<String>,
         val segmentCount: Int, val gapRatio: Float, val config: GifConfig,
-        val sourceWidth: Int, val sourceHeight: Int
+        val sourceWidth: Int, val sourceHeight: Int,
+        val gifSourcePath: String? = null
     )
 
     private fun readTaskParams(taskId: String): TaskParams? {
@@ -132,7 +133,8 @@ class ExportService : Service() {
                     gapRatio = obj.getDouble("gapRatio").toFloat(),
                     config = cfg,
                     sourceWidth = obj.optInt("sourceWidth", 0),
-                    sourceHeight = obj.optInt("sourceHeight", 0)
+                    sourceHeight = obj.optInt("sourceHeight", 0),
+                    gifSourcePath = obj.optString("gifSourcePath", null)?.takeIf { it.isNotEmpty() }
                 )
             }
             null
@@ -258,7 +260,12 @@ class ExportService : Service() {
                     files.mapIndexed { i, f -> GifResult(i, f.absolutePath, maxW, maxH, f.length(), 1) }
                 }
                 ExportTask.SourceType.IMAGES -> {
-                    val frames = params.imageUris.mapNotNull { ImageUtils.loadBitmapFromUri(this@ExportService, Uri.parse(it)) }
+                    val frames = if (params.gifSourcePath != null) {
+                        // GIF 源 → 先用 FFmpeg 拆帧
+                        extractGifFrames(params.gifSourcePath!!, outputDir)
+                    } else {
+                        params.imageUris.mapNotNull { ImageUtils.loadBitmapFromUri(this@ExportService, Uri.parse(it)) }
+                    }
                     if (frames.isEmpty()) throw Exception("未能加载图片")
                     // 使用多图生成，分批执行
                     runImagesBatchExport(params, frames, outputDir)
@@ -333,7 +340,7 @@ class ExportService : Service() {
                 }
                 prevCrop?.recycle()
 
-                val gifFps = (1000f / params.config.frameDelayMs).coerceIn(1f, 30f).toInt()
+                val gifFps = params.config.maxFrameRate.coerceIn(1, 30)
                 val inputArg = "-framerate $gifFps -i \"${tempDir.absolutePath}/f_%03d.png\""
 
                 val gifFlags = buildString {
@@ -446,6 +453,22 @@ class ExportService : Service() {
             _state.value = ExportState.Progress(taskId = taskId, current = p, total = segCount)
         }
         return results
+    }
+
+    /** 用 FFmpeg 拆解 GIF 为 Bitmap 列表 */
+    private fun extractGifFrames(gifPath: String, outputDir: File): List<Bitmap> {
+        val frameDir = File(outputDir, "_gif_frames").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+        val cmd = "-y -i \"$gifPath\" -vsync 0 \"${frameDir.absolutePath}/f_%03d.png\""
+        val session = try { com.arthenica.ffmpegkit.FFmpegKit.execute(cmd) }
+            catch (e: Throwable) { throw RuntimeException("FFmpeg 拆帧失败: ${e.message}") }
+        if (!com.arthenica.ffmpegkit.ReturnCode.isSuccess(session.returnCode)) {
+            throw RuntimeException("FFmpeg 拆帧失败")
+        }
+        val files = frameDir.listFiles()?.filter { it.name.startsWith("f_") }?.sorted() ?: emptyList()
+        return files.mapNotNull { f ->
+            try { android.graphics.BitmapFactory.decodeFile(f.absolutePath) }
+            catch (_: Exception) { null }
+        }.also { frameDir.listFiles()?.forEach { it.delete() }; frameDir.delete() }
     }
 
     /** 将 Bitmap 按中心裁剪方式缩放到目标尺寸（防止多图比例不同时越界） */
