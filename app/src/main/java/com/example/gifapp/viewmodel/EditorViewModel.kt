@@ -424,7 +424,7 @@ class EditorViewModel : ViewModel() {
         isImporting = true
         viewModelScope.launch {
             try {
-                val cachedNew = withContext(Dispatchers.IO) { copyUrisToCache(context, uris, "images") }
+                val cachedNew = withContext(Dispatchers.IO) { copyUrisToCache(context, uris, "images", clearExisting = false) }
                 val merged = (imageUris + cachedNew).distinct()
                 imageUris = merged
                 if (previewBitmap == null && merged.isNotEmpty()) {
@@ -442,12 +442,13 @@ class EditorViewModel : ViewModel() {
     }
 
     /** 将 URI 内容复制到缓存目录，返回本地 cached Uri（不依赖临时权限） */
-    private fun copyUrisToCache(context: Context, uris: List<Uri>, subDir: String): List<Uri> {
+    private fun copyUrisToCache(context: Context, uris: List<Uri>, subDir: String, clearExisting: Boolean = true): List<Uri> {
         val dir = File(context.cacheDir, subDir).apply { mkdirs() }
-        // 清理旧缓存
-        dir.listFiles()?.forEach { it.delete() }
+        if (clearExisting) dir.listFiles()?.forEach { it.delete() }
+        // 追加模式：从现有文件数之后开始编号，避免覆盖
+        val startIdx = if (clearExisting) 0 else (dir.listFiles()?.filter { it.name.startsWith("img_") }?.size ?: 0)
         return uris.mapIndexed { i, uri ->
-            val file = File(dir, "img_${"%03d".format(i)}.png")
+            val file = File(dir, "img_${"%03d".format(startIdx + i)}.png")
             try {
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     file.outputStream().use { input.copyTo(it) }
