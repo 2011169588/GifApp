@@ -112,6 +112,23 @@ object ImageUtils {
     }
 
     /**
+     * Extract only the first frame of a video (used for preview thumbnail).
+     * Much faster than full frame extraction — no seeking needed.
+     */
+    fun extractFirstVideoFrame(context: Context, uri: Uri): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            return retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+    }
+
+    /**
      * Rotate a bitmap.
      */
     fun rotateBitmap(bitmap: Bitmap, degrees: Float): Bitmap {

@@ -94,6 +94,42 @@ class EditorViewModel : ViewModel() {
 
     private var cachedVideoFrames: List<Bitmap> = emptyList()
 
+    // ---- Homepage ----
+    var homepageDescription by mutableStateOf("")
+
+    // ---- Update Check ----
+    var updateInfo by mutableStateOf(com.example.gifapp.util.UpdateInfo(false))
+        private set
+    /** 每次启动只自动检查一次 */
+    var updateCheckedOnce by mutableStateOf(false)
+        private set
+    var showUpdateDialog by mutableStateOf(false)
+        private set
+
+    fun checkForUpdate() {
+        if (updateCheckedOnce) return
+        updateCheckedOnce = true
+        viewModelScope.launch {
+            updateInfo = withContext(Dispatchers.IO) { com.example.gifapp.util.UpdateChecker.check() }
+        }
+    }
+
+    fun manualCheckForUpdate() {
+        viewModelScope.launch {
+            updateInfo = withContext(Dispatchers.IO) {
+                com.example.gifapp.util.UpdateChecker.check()
+            }
+        }
+    }
+
+    fun dismissUpdateDialog() { showUpdateDialog = false }
+
+    fun showUpdateInfo() {
+        if (updateInfo.hasUpdate) {
+            showUpdateDialog = true
+        }
+    }
+
     // 【修复】使用 Map 追踪每个任务的 Job，防止多任务互相踩踏
     private val activeJobs = mutableMapOf<String, Job>()
 
@@ -308,15 +344,22 @@ class EditorViewModel : ViewModel() {
         if (isImporting) return
         isImporting = true
         viewModelScope.launch {
-            mediaSource = null; generatedGifs = emptyList()
-            previewBitmap = null; imageUris = uris
-            if (uris.isNotEmpty()) {
-                val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, uris[0]) }
-                if (bm != null) { previewBitmap = bm
-                    mediaSource = MediaSource.Image(bm, uris[0].toString())
-                    currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
+            try {
+                mediaSource = null; generatedGifs = emptyList()
+                previewBitmap = null; imageUris = uris
+                if (uris.isNotEmpty()) {
+                    // 确保 URI 权限持久化（防止长时间选择后权限过期）
+                    tryTakePersistablePermission(context, uris)
+                    val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, uris[0]) }
+                    if (bm != null) { previewBitmap = bm
+                        mediaSource = MediaSource.Image(bm, uris[0].toString())
+                        currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isImporting = false
             }
-            isImporting = false
         }
     }
 
@@ -349,8 +392,9 @@ class EditorViewModel : ViewModel() {
                 if (bm != null) { previewBitmap = bm; imageUris = listOf(uri)
                     mediaSource = MediaSource.Image(bm, uri.toString())
                     currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
+            } finally {
+                isImporting = false
             }
-            isImporting = false
         }
     }
 
@@ -380,16 +424,32 @@ class EditorViewModel : ViewModel() {
         if (isImporting || uris.isEmpty()) return
         isImporting = true
         viewModelScope.launch {
-            val merged = (imageUris + uris).distinct()
-            imageUris = merged
-            if (previewBitmap == null && merged.isNotEmpty()) {
-                val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, merged[0]) }
-                if (bm != null) { previewBitmap = bm
-                    mediaSource = MediaSource.Image(bm, merged[0].toString())
-                    currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
+            try {
+                tryTakePersistablePermission(context, uris)
+                val merged = (imageUris + uris).distinct()
+                imageUris = merged
+                if (previewBitmap == null && merged.isNotEmpty()) {
+                    val bm = withContext(Dispatchers.IO) { ImageUtils.loadBitmapFromUri(context, merged[0]) }
+                    if (bm != null) { previewBitmap = bm
+                        mediaSource = MediaSource.Image(bm, merged[0].toString())
+                        currentImageIndex = 0; resetTransform(); resetConfigDimensions() }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isImporting = false
             }
-            isImporting = false
         }
+    }
+
+    /** 尝试持久化 URI 读取权限（防止文件选择器待太久后权限过期） */
+    private fun tryTakePersistablePermission(context: Context, uris: List<Uri>) {
+        try {
+            for (uri in uris) {
+                context.contentResolver.takePersistableUriPermission(uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        } catch (_: Exception) { /* 非持久化 URI 会抛异常，忽略 */ }
     }
 
     fun switchImage(context: Context, index: Int) {
@@ -409,13 +469,19 @@ class EditorViewModel : ViewModel() {
         if (isImporting) return
         isImporting = true
         viewModelScope.launch {
-            mediaSource = null; generatedGifs = emptyList()
-            previewBitmap = null
-            cachedVideoFrames = emptyList()
-            val frames = withContext(Dispatchers.IO) { ImageUtils.extractVideoFrames(context, uri, maxFrames = gifConfig.maxVideoFrames) }
-            if (frames.isNotEmpty()) { cachedVideoFrames = frames.toList(); previewBitmap = frames.first()
-                mediaSource = MediaSource.Video(uri.toString()); resetTransform(); resetConfigDimensions() }
-            isImporting = false
+            try {
+                mediaSource = null; generatedGifs = emptyList()
+                previewBitmap = null
+                cachedVideoFrames = emptyList()
+                // 只取第一帧做预览，完整拆帧留给 FFmpeg 导出时处理
+                val firstFrame = withContext(Dispatchers.IO) { ImageUtils.extractFirstVideoFrame(context, uri) }
+                if (firstFrame != null) { previewBitmap = firstFrame
+                    mediaSource = MediaSource.Video(uri.toString()); resetTransform(); resetConfigDimensions() }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isImporting = false
+            }
         }
     }
 

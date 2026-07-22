@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.gifapp"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = 4
+        versionName = "1.2.0"
 
         buildConfigField("String", "WATERMARK_SIGNATURE", "\"最终之刃\"")
         buildConfigField("String", "WATERMARK_HOUSE", "\"万剑之主，千剑之家\"")

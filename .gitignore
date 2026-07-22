@@ -1,0 +1,30 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Build outputs
+build/
+*.apk
+*.aab
+*.ap_
+
+# Kotlin cache
+.kotlin/
+
+# Logs
+*.log
+
+# Claude / agent
+.claude/
+.mcp.json
+
+# OS temp files
+*.swp
+*.swo
+*~
