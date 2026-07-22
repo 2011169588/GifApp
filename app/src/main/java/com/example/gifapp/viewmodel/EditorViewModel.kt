@@ -572,19 +572,24 @@ class EditorViewModel : ViewModel() {
         viewModelScope.launch {
             val dirName = "GIFSplitter/${java.text.SimpleDateFormat("yyyy-MM-dd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())}"
             withContext(Dispatchers.IO) {
-                task.results.forEach { gif ->
+                val baseTime = System.currentTimeMillis() / 1000
+                task.results.sortedBy { it.index }.forEachIndexed { i, gif ->
                     val file = File(gif.filePath)
-                    if (!file.exists()) return@forEach
+                    if (!file.exists()) return@forEachIndexed
                     val values = ContentValues().apply {
                         put(MediaStore.Images.Media.DISPLAY_NAME, "segment_${gif.index + 1}.gif")
                         put(MediaStore.Images.Media.MIME_TYPE, "image/gif")
                         put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/$dirName")
+                        // 用 baseTime + i 保证时间戳顺序与段序号一致
+                        put(MediaStore.Images.Media.DATE_ADDED, baseTime)
+                        put(MediaStore.Images.Media.DATE_MODIFIED, baseTime + i)
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
                     val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
                     if (uri != null) {
                         context.contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
-                        values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        values.clear()
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
                         context.contentResolver.update(uri, values, null, null)
                     }
                 }

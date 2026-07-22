@@ -291,84 +291,89 @@ class ExportService : Service() {
         }
     }
 
-    /** 图片源分批导出（多图尺寸不同时会自动中心裁剪统一尺寸） */
+    /** 图片源分批导出 — batch 内多条 segment 合并为一条 FFmpeg 命令同时输出 */
     private suspend fun runImagesBatchExport(params: TaskParams, frames: List<Bitmap>, outputDir: File): List<GifResult> {
         val results = mutableListOf<GifResult>()
 
-        // 统一所有帧的尺寸（以第一帧为基准，中心裁剪），防止不同比例图片导出时越界崩溃
+        // 统一所有帧的尺寸
         val targetW = frames.first().width
         val targetH = frames.first().height
         val uniformFrames = frames.map { normalizeFrame(it, targetW, targetH) }
 
         val segH = computeSegHeight(targetH, params.segmentCount, params.gapRatio)
-
-        // 改成逐步执行：每个 segment 跑一次 FFmpeg
-        // 但如果 parallelCount > 1，每次处理一批
+        val gapH = (targetH * params.gapRatio).toInt()
         val batchSize = params.config.parallelCount.coerceIn(1, params.segmentCount)
+        val gifFps = params.config.maxFrameRate.coerceIn(1, 30)
+
         for (batchStart in 0 until params.segmentCount step batchSize) {
             if (cancelled.get()) break
             val batchEnd = minOf(batchStart + batchSize, params.segmentCount)
-            val batchCount = batchEnd - batchStart
+            val batchIndices = (batchStart until batchEnd).toList()
 
-            // 对这个 batch 中的每个 segment，生成完整的 GIF
-            for (segIdx in batchStart until batchEnd) {
-                if (cancelled.get()) break
-                val localIndex = segIdx - batchStart
-                // 裁剪每帧的 segment 区域
-                val y = segIdx * (segH + (targetH * params.gapRatio).toInt())
-                val cropH = segH
+            // 对 batch 中每条 segment：裁剪帧 → 写入独立目录
+            val gifFlags = buildString {
+                if (params.config.losslessOptimize) append("+offsetting")
+                if (params.config.transparencyOptimize) { if (isNotEmpty()) append(","); append("+transparency") }
+            }
+            val opt = if (gifFlags.isNotEmpty()) "-gifflags ${gifFlags} " else ""
+            val inputArgs = mutableListOf<String>()
+            val filterParts = mutableListOf<String>()
+            val mapArgs = mutableListOf<String>()
+            val outputFiles = mutableListOf<File>()
 
-                // 创建临时裁剪帧（支持帧去重：在写入前比较裁剪后的帧）
-                val tempDir = File(outputDir, "_batch_$segIdx").apply { mkdirs() }
-                var frameSeq = 0
+            for ((localIdx, segIdx) in batchIndices.withIndex()) {
+                val y = segIdx * (segH + gapH)
+                val segDir = File(outputDir, "_b${batchStart}_s$segIdx").apply { mkdirs() }
+
+                // 裁剪帧
                 var prevCrop: Bitmap? = null
+                var frameSeq = 0
                 for ((fi, frame) in uniformFrames.withIndex()) {
                     val safeY = y.coerceIn(0, frame.height - 1)
-                    val safeCropH = cropH.coerceAtMost(frame.height - safeY).coerceAtLeast(1)
-                    val cropBitmap = Bitmap.createBitmap(frame, 0, safeY, frame.width, safeCropH)
-                    val isDup = params.config.frameDedup && prevCrop != null && bitmapsEqual(prevCrop!!, cropBitmap)
-                    if (isDup) {
-                        cropBitmap.recycle()
-                    } else {
-                        FileOutputStream(File(tempDir, "f_${"%03d".format(frameSeq)}.png")).use {
-                            cropBitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+                    val safeCropH = segH.coerceAtMost(frame.height - safeY).coerceAtLeast(1)
+                    val crop = Bitmap.createBitmap(frame, 0, safeY, frame.width, safeCropH)
+                    val isDup = params.config.frameDedup && prevCrop != null && bitmapsEqual(prevCrop!!, crop)
+                    if (isDup) { crop.recycle() } else {
+                        FileOutputStream(File(segDir, "f_${"%03d".format(frameSeq)}.png")).use {
+                            crop.compress(Bitmap.CompressFormat.PNG, 100, it)
                         }
-                        frameSeq++
-                        prevCrop?.recycle()
-                        prevCrop = cropBitmap
+                        frameSeq++; prevCrop?.recycle(); prevCrop = crop
                     }
                 }
                 prevCrop?.recycle()
+                if (frameSeq == 0) continue
 
-                val gifFps = params.config.maxFrameRate.coerceIn(1, 30)
-                val inputArg = "-framerate $gifFps -i \"${tempDir.absolutePath}/f_%03d.png\""
-
-                val gifFlags = buildString {
-                    if (params.config.losslessOptimize) append("+offsetting")
-                    if (params.config.transparencyOptimize) { if (isNotEmpty()) append(","); append("+transparency") }
-                }
-                val opt = if (gifFlags.isNotEmpty()) "-gifflags ${gifFlags} " else ""
-
-                val cmd = "-y $inputArg -vf \"scale=${params.config.outputWidth}:${params.config.outputHeight}:flags=lanczos\" " +
-                        "-loop ${if (params.config.loopForever) 0 else 1} " +
-                        opt +
-                        "\"${File(outputDir, "segment_${segIdx + 1}.gif").absolutePath}\""
-
-                if (!runFfmpeg(cmd)) break
-
-                // 清理临时帧
-                tempDir.listFiles()?.forEach { it.delete() }; tempDir.delete()
-
+                val label = "s$localIdx"
+                inputArgs.add("-framerate $gifFps -i \"${segDir.absolutePath}/f_%03d.png\"")
+                filterParts.add("[${label}]scale=${params.config.outputWidth}:${params.config.outputHeight}:flags=lanczos[${label}o]")
                 val outFile = File(outputDir, "segment_${segIdx + 1}.gif")
-                if (outFile.exists() && outFile.length() > 0) {
-                    results.add(GifResult(segIdx, outFile.absolutePath, params.config.outputWidth, params.config.outputHeight, outFile.length(), 1))
-                }
+                outputFiles.add(outFile)
+                mapArgs.add("-map \"[${label}o]\" -loop ${if (params.config.loopForever) 0 else 1} $opt\"${outFile.absolutePath}\"")
+            }
 
-                val p = batchStart + localIndex + 1
+            if (outputFiles.isEmpty()) break
+
+            // 一条 FFmpeg 命令处理 batch 内所有 segment
+            val cmd = "-y ${inputArgs.joinToString(" ")} -filter_complex \"${filterParts.joinToString("; ")}\" ${mapArgs.joinToString(" ")}"
+            val batchOk = try {
+                runFfmpeg(cmd)
+            } catch (_: Exception) { false }
+
+            // 收尾
+            for ((localIdx, segIdx) in batchIndices.withIndex()) {
+                File(outputDir, "_b${batchStart}_s$segIdx").let { it.listFiles()?.forEach { f -> f.delete() }; it.delete() }
+                if (batchOk) {
+                    val outFile = File(outputDir, "segment_${segIdx + 1}.gif")
+                    if (outFile.exists() && outFile.length() > 0) {
+                        results.add(GifResult(segIdx, outFile.absolutePath, params.config.outputWidth, params.config.outputHeight, outFile.length(), 1))
+                    }
+                }
+                val p = batchStart + localIdx + 1
                 _state.value = ExportState.Progress(params.taskId, p, params.segmentCount)
                 updateTaskInFile(params.taskId, TaskStatus.RUNNING, progress = p, total = params.segmentCount)
                 showNotification("段 $p / ${params.segmentCount}", p, params.segmentCount)
             }
+            if (!batchOk) break
         }
         return results
     }
