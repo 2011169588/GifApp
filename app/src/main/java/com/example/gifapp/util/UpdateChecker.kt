@@ -39,10 +39,21 @@ object UpdateChecker {
             } catch (_: Exception) { "" }
 
             val hasUpdate = compareVersions(tagName, BuildConfig.VERSION_NAME) > 0
-            UpdateInfo(hasUpdate, tagName, body, downloadUrl, releaseUrl)
+            UpdateInfo(hasUpdate, tagName, formatReleaseNotes(body), downloadUrl, releaseUrl)
         } catch (_: Exception) {
             UpdateInfo(false)
         }
+    }
+
+    /** Markdown → 纯文本：去除标题标记、加粗、列表符号 */
+    private fun formatReleaseNotes(notes: String): String {
+        return notes.lines().joinToString("\n") { line ->
+            line.trimStart()
+                .replace(Regex("^###+\\s*"), "")      // ### heading → text
+                .replace(Regex("^\\*\\*([^*]+)\\*\\*"), "$1") // **bold** → text
+                .replace(Regex("^[-*]\\s+"), "• ")    // list item → bullet
+                .trimEnd()
+        }.trim()
     }
 
     private fun compareVersions(v1: String, v2: String): Int {
