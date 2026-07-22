@@ -302,7 +302,7 @@ class EditorViewModel : ViewModel() {
                     status = actualStatus, progress = obj.getInt("progress"), total = obj.getInt("total"),
                     results = results, errorMessage = errMsg,
                     config = GifConfig(outputWidth = obj.getInt("outputWidth"), outputHeight = obj.getInt("outputHeight"),
-                        frameDelayMs = obj.getInt("frameDelayMs"), maxFrameRate = obj.getInt("maxFrameRate"), maxVideoFrames = obj.getInt("maxVideoFrames"),
+                        frameDelayMs = obj.getInt("frameDelayMs"), maxFrameRate = obj.optInt("maxFrameRate", 15), maxVideoFrames = obj.getInt("maxVideoFrames"),
                         loopForever = obj.getBoolean("loopForever"), colorCount = obj.optInt("colorCount", 256),
                         useBayerDither = obj.optBoolean("useBayerDither", false), losslessOptimize = obj.optBoolean("losslessOptimize", false),
                         paletteStatsFull = obj.optBoolean("paletteStatsFull", false),
