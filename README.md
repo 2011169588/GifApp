@@ -68,6 +68,6 @@ cd GifApp
 | Jetpack Compose / Material3 / AndroidX | Apache 2.0 |
 
 FFmpegKit 是 GPLv3 许可的完整 FFmpeg 发行版。  
-如需替换 GPL 编解码器，可使用 `ffmpeg-kit-min-gpl` 或 `ffmpeg-kit-min`。
+如需替换 GPL 编解码器，可使用 `ffmpeg-kit-min-gpl` 或 `ffmpeg-kit-min`
 
 本项目源码采用 **MIT** 许可。
